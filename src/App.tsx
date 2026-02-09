@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-
 import { NetworkProvider, useNetwork } from './contexts/NetworkContext';
 import { WalletProvider } from './contexts/WalletContext';
 import { CanopyProvider } from './contexts/CanopyContext';
@@ -12,9 +11,6 @@ import { initSentry, SentryErrorBoundary, setSentryNetwork } from './lib/sentry'
 
 // Initialize Sentry as early as possible
 initSentry();
-
-// Fonts are embedded natively via expo-font plugin in app.json
-// No runtime loading needed - they're available immediately
 
 // Fallback component for error boundary
 function ErrorFallback({
