@@ -1,0 +1,71 @@
+{
+  "expo": {
+    "name": "Canopy",
+    "slug": "canopy-mobile",
+    "scheme": "com.canopy.mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A2818"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.canopy.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0A2818"
+      },
+      "package": "com.canopy.mobile",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "com.canopy.mobile"
+            }
+          ],
+          "category": ["DEFAULT", "BROWSABLE"]
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-asset",
+      "@sentry/react-native/expo",
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/ionicons.ttf",
+            "./assets/fonts/Satoshi-Black.ttf",
+            "./assets/fonts/Satoshi-Bold.ttf",
+            "./assets/fonts/Satoshi-Medium.ttf",
+            "./assets/fonts/Satoshi-Regular.ttf",
+            "./assets/fonts/SpaceGrotesk_300Light.ttf",
+            "./assets/fonts/SpaceGrotesk_400Regular.ttf",
+            "./assets/fonts/SpaceGrotesk_500Medium.ttf",
+            "./assets/fonts/SpaceGrotesk_600SemiBold.ttf",
+            "./assets/fonts/SpaceGrotesk_700Bold.ttf"
+          ]
+        }
+      ],
+      "@sentry/react-native"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "your-project-id"
+      }
+    }
+  }
+}
