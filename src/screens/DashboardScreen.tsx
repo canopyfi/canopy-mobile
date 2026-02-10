@@ -74,11 +74,6 @@ export default function DashboardScreen() {
           <Text style={styles.welcomeText}>
             Welcome{matricaProfile?.username ? `, ${matricaProfile.username}` : ' back'}
           </Text>
-          {walletAddress && (
-            <Text style={styles.walletAddress} numberOfLines={1}>
-              {walletAddress.slice(0, 8)}...{walletAddress.slice(-8)}
-            </Text>
-          )}
         </View>
 
         {/* Stats Cards */}

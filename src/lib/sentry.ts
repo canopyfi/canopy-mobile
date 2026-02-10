@@ -79,6 +79,10 @@ export function initSentry(): void {
     return;
   }
 
+  const environment = getEnvironment();
+  const release = getRelease();
+  const dist = getDist();
+
   Sentry.init({
     dsn: SENTRY_DSN,
     environment,
