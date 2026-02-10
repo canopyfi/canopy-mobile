@@ -130,6 +130,13 @@ jest.mock('@sentry/react-native', () => ({
   setTag: jest.fn(),
   addBreadcrumb: jest.fn(),
   startInactiveSpan: jest.fn(),
+  startSpan: jest.fn().mockImplementation((_options, callback) => {
+    const mockSpan = {
+      setStatus: jest.fn(),
+      setAttribute: jest.fn(),
+    };
+    return callback(mockSpan);
+  }),
   reactNavigationIntegration: jest.fn().mockReturnValue({ name: 'ReactNavigation' }),
   httpClientIntegration: jest.fn().mockReturnValue({ name: 'HttpClient' }),
   ErrorBoundary: ({ children }) => children,

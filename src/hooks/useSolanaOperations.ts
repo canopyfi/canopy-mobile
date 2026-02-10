@@ -3,6 +3,8 @@ import { PublicKey, LAMPORTS_PER_SOL, Transaction } from '@solana/web3.js';
 import { Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { useWallet } from '../contexts/WalletContext';
 import { useCanopy } from '../contexts/CanopyContext';
+import { useNetwork } from '../contexts/NetworkContext';
+import { trackWalletTransaction, captureWalletFailure } from '../lib/wallet-telemetry';
 
 // Default Canopy program ID (matches @canopyfi/sdk devnet)
 const DEFAULT_CANOPY_PROGRAM_ID = '6M7Ysuvus47X5M4RQA48L3YPKpLi5vyN5dvvwoiDCGdF';
@@ -32,6 +34,7 @@ function deriveWateringPdaLocal(
 export function useSolanaOperations() {
   const { connection, publicKey, signAndSendTransaction } = useWallet();
   const { matricaProfile } = useCanopy();
+  const { network } = useNetwork();
   const [loading, setLoading] = useState(false);
 
   /**
@@ -71,40 +74,52 @@ export function useSolanaOperations() {
       if (!publicKey) throw new Error('Wallet not connected');
       if (!matricaProfile?.id) throw new Error('User profile not loaded');
 
+      const attrs = {
+        plot_pda: plotPda,
+        amount,
+        wallet: publicKey.toBase58(),
+        wallet_type: 'mobile_wallet_adapter',
+        network,
+      };
+
       setLoading(true);
 
       try {
-        const externalUserId = matricaProfile.id.toString();
+        return await trackWalletTransaction('indicate_interest', attrs, async () => {
+          const externalUserId = matricaProfile.id.toString();
 
-        // Use API-based approach for indicating interest
-        // Call the backend API to create the interest indication
-        const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL || 'https://api.canopy.app';
+          // Use API-based approach for indicating interest
+          // Call the backend API to create the interest indication
+          const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL || 'https://api.canopy.app';
 
-        const response = await fetch(`${apiBaseUrl}/api/waterings/indicate`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            plot_pda: plotPda,
-            wallet_address: publicKey.toBase58(),
-            requested_allotment: Math.floor(amount * 1_000_000),
-            external_user_id: externalUserId,
-          }),
+          const response = await fetch(`${apiBaseUrl}/api/waterings/indicate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              plot_pda: plotPda,
+              wallet_address: publicKey.toBase58(),
+              requested_allotment: Math.floor(amount * 1_000_000),
+              external_user_id: externalUserId,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.message || 'Failed to indicate interest';
+            captureWalletFailure('indicate_interest', errorMessage, attrs);
+            throw new Error(errorMessage);
+          }
+
+          const result = await response.json();
+          return result.signature || 'pending';
         });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || 'Failed to indicate interest');
-        }
-
-        const result = await response.json();
-        return result.signature || 'pending';
       } finally {
         setLoading(false);
       }
     },
-    [publicKey, matricaProfile]
+    [publicKey, matricaProfile, network]
   );
 
   /**
@@ -119,55 +134,68 @@ export function useSolanaOperations() {
     ): Promise<{ signature: string; receiptMint: PublicKey }> => {
       if (!publicKey) throw new Error('Wallet not connected');
 
+      const attrs = {
+        plot_pda: plotPda,
+        amount,
+        wallet: publicKey.toBase58(),
+        wallet_type: 'mobile_wallet_adapter',
+        network,
+      };
+
       setLoading(true);
 
       try {
-        // For deposit, we need to call the API to build the transaction
-        // then sign it with MWA
-        const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL || 'https://api.canopy.app';
+        return await trackWalletTransaction('deposit_watering', attrs, async () => {
+          // For deposit, we need to call the API to build the transaction
+          // then sign it with MWA
+          const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL || 'https://api.canopy.app';
 
-        const response = await fetch(`${apiBaseUrl}/api/waterings/deposit/prepare`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            plot_pda: plotPda,
-            wallet_address: publicKey.toBase58(),
-            amount: Math.floor(amount * 1_000_000),
-          }),
+          const response = await fetch(`${apiBaseUrl}/api/waterings/deposit/prepare`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              plot_pda: plotPda,
+              wallet_address: publicKey.toBase58(),
+              amount: Math.floor(amount * 1_000_000),
+            }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.message || 'Failed to prepare deposit';
+            captureWalletFailure('deposit_watering', errorMessage, attrs);
+            throw new Error(errorMessage);
+          }
+
+          const { transaction: serializedTx, receiptMint: receiptMintString } =
+            await response.json();
+
+          // Deserialize and sign the transaction
+          const transaction = Transaction.from(Buffer.from(serializedTx, 'base64'));
+
+          // Sign and send via Mobile Wallet Adapter
+          const signature = await signAndSendTransaction(transaction);
+
+          // Wait for confirmation
+          const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+          await connection.confirmTransaction({
+            signature,
+            blockhash,
+            lastValidBlockHeight,
+          });
+
+          return {
+            signature,
+            receiptMint: new PublicKey(receiptMintString),
+          };
         });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || 'Failed to prepare deposit');
-        }
-
-        const { transaction: serializedTx, receiptMint: receiptMintString } = await response.json();
-
-        // Deserialize and sign the transaction
-        const transaction = Transaction.from(Buffer.from(serializedTx, 'base64'));
-
-        // Sign and send via Mobile Wallet Adapter
-        const signature = await signAndSendTransaction(transaction);
-
-        // Wait for confirmation
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-        await connection.confirmTransaction({
-          signature,
-          blockhash,
-          lastValidBlockHeight,
-        });
-
-        return {
-          signature,
-          receiptMint: new PublicKey(receiptMintString),
-        };
       } finally {
         setLoading(false);
       }
     },
-    [publicKey, connection, signAndSendTransaction]
+    [publicKey, connection, signAndSendTransaction, network]
   );
 
   /**

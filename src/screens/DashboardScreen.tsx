@@ -29,15 +29,8 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function DashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const {
-    walletAddress,
-    matricaProfile,
-    plots,
-    investments,
-    isLoading,
-    refreshPlots,
-    refreshInvestments,
-  } = useCanopy();
+  const { matricaProfile, plots, investments, isLoading, refreshPlots, refreshInvestments } =
+    useCanopy();
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = async () => {
@@ -81,11 +74,6 @@ export default function DashboardScreen() {
           <Text style={styles.welcomeText}>
             Welcome{matricaProfile?.username ? `, ${matricaProfile.username}` : ' back'}
           </Text>
-          {walletAddress && (
-            <Text style={styles.walletAddress} numberOfLines={1}>
-              {walletAddress.slice(0, 8)}...{walletAddress.slice(-8)}
-            </Text>
-          )}
         </View>
 
         {/* Stats Cards */}
@@ -280,11 +268,6 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.heading,
     color: colors.text,
     marginBottom: spacing.xs,
-  },
-  walletAddress: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.body,
-    color: colors.textSecondary,
   },
   statsContainer: {
     flexDirection: 'row',
