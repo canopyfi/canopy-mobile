@@ -2,19 +2,66 @@
  * Sentry Configuration for Canopy Mobile App
  *
  * Provides error tracking, logging, and performance monitoring
+ *
+ * Environment setup:
+ * - development: Local dev builds (__DEV__ = true)
+ * - preview: Internal testing builds (EAS preview)
+ * - production: Solana Seeker dApp Store releases
+ *
+ * Set EXPO_PUBLIC_SENTRY_ENVIRONMENT in eas.json env to override.
  */
 
 import * as Sentry from '@sentry/react-native';
+import Constants from 'expo-constants';
 
 // Get DSN from environment variable
 const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN || '';
 
-// Determine environment based on __DEV__ flag
+// Get app version info for release tracking
+const APP_VERSION = Constants.expoConfig?.version || '1.0.0';
+const BUILD_NUMBER =
+  Constants.expoConfig?.ios?.buildNumber ||
+  Constants.expoConfig?.android?.versionCode?.toString() ||
+  '1';
+const BUNDLE_ID =
+  Constants.expoConfig?.ios?.bundleIdentifier ||
+  Constants.expoConfig?.android?.package ||
+  'com.canopy.mobile';
+
+/**
+ * Determine environment based on build configuration
+ * Priority: EXPO_PUBLIC_SENTRY_ENVIRONMENT > __DEV__ detection
+ */
 const getEnvironment = (): string => {
+  // Allow explicit override via environment variable
+  const envOverride = process.env.EXPO_PUBLIC_SENTRY_ENVIRONMENT;
+  if (envOverride) {
+    return envOverride;
+  }
+
+  // Development builds
   if (__DEV__) {
     return 'development';
   }
+
+  // Default to production for release builds
+  // For preview/staging, set EXPO_PUBLIC_SENTRY_ENVIRONMENT=preview in eas.json
   return 'production';
+};
+
+/**
+ * Get release identifier in format: bundleId@version+buildNumber
+ * Example: com.canopy.mobile@1.0.0+42
+ */
+const getRelease = (): string => {
+  return `${BUNDLE_ID}@${APP_VERSION}+${BUILD_NUMBER}`;
+};
+
+/**
+ * Get distribution identifier (build number)
+ */
+const getDist = (): string => {
+  return BUILD_NUMBER;
 };
 
 // Create navigation integration for screen tracking (must be created before init)
@@ -34,7 +81,9 @@ export function initSentry(): void {
 
   Sentry.init({
     dsn: SENTRY_DSN,
-    environment: getEnvironment(),
+    environment,
+    release,
+    dist,
 
     // Enable debug in development
     debug: __DEV__,
@@ -97,7 +146,7 @@ export function initSentry(): void {
     },
   });
 
-  console.warn('[Sentry] Initialized with environment:', getEnvironment());
+  console.warn('[Sentry] Initialized:', { environment, release, dist });
 }
 
 /**
