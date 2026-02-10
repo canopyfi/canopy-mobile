@@ -17,6 +17,12 @@ jest.mock('../../contexts/CanopyContext', () => ({
   }),
 }));
 
+jest.mock('../../contexts/NetworkContext', () => ({
+  useNetwork: jest.fn().mockReturnValue({
+    network: 'devnet',
+  }),
+}));
+
 // Mock fetch for API calls
 const mockFetch = global.fetch as jest.Mock;
 

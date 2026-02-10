@@ -29,15 +29,8 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function DashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const {
-    walletAddress,
-    matricaProfile,
-    plots,
-    investments,
-    isLoading,
-    refreshPlots,
-    refreshInvestments,
-  } = useCanopy();
+  const { matricaProfile, plots, investments, isLoading, refreshPlots, refreshInvestments } =
+    useCanopy();
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = async () => {
@@ -280,11 +273,6 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.heading,
     color: colors.text,
     marginBottom: spacing.xs,
-  },
-  walletAddress: {
-    fontSize: fontSize.sm,
-    fontFamily: fontFamily.body,
-    color: colors.textSecondary,
   },
   statsContainer: {
     flexDirection: 'row',
