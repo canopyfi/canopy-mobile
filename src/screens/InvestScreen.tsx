@@ -27,6 +27,89 @@ import { logger } from '../lib/logger';
 
 type RouteType = RouteProp<RootStackParamList, 'Invest'>;
 
+/**
+ * Map raw MWA / Solana errors to user-friendly messages.
+ */
+function getFriendlyError(error: unknown): { title: string; message: string } {
+  const raw = error instanceof Error ? error.message : String(error);
+
+  // MWA connection errors
+  if (raw.includes('current activity') || raw.includes('Could not find')) {
+    return {
+      title: 'Wallet App Not Found',
+      message: 'Please install a Solana wallet app (like Phantom or Solflare) and try again.',
+    };
+  }
+  if (raw.includes('cancelled') || raw.includes('canceled')) {
+    return { title: 'Cancelled', message: 'You cancelled the wallet request.' };
+  }
+  if (raw.includes('rejected') || raw.includes('denied')) {
+    return { title: 'Rejected', message: 'The transaction was rejected in your wallet.' };
+  }
+  if (raw.includes('timeout') || raw.includes('timed out')) {
+    return { title: 'Timed Out', message: 'The wallet request timed out. Please try again.' };
+  }
+  if (raw.includes('not installed') || raw.includes('no wallet')) {
+    return {
+      title: 'No Wallet Found',
+      message: 'Please install a Solana wallet app to continue.',
+    };
+  }
+
+  // Transaction / on-chain errors
+  if (raw.includes('already-exists') || raw.includes('already been processed')) {
+    return {
+      title: 'Already Registered',
+      message: 'You have already indicated interest in this opportunity.',
+    };
+  }
+  if (raw.includes('Wallet mismatch')) {
+    return {
+      title: 'Wrong Wallet',
+      message: 'This investment is linked to a different wallet. Please switch wallets and try again.',
+    };
+  }
+  if (raw.includes('insufficient') || raw.includes('not enough')) {
+    return {
+      title: 'Insufficient Funds',
+      message: 'You don\'t have enough funds to complete this transaction.',
+    };
+  }
+  if (raw.includes('AccountNotInitialized') && raw.includes('user_token_account')) {
+    return {
+      title: 'No Token Account',
+      message: 'You need USDC in your wallet before you can invest.',
+    };
+  }
+  if (raw.includes('User profile not loaded')) {
+    return {
+      title: 'Not Signed In',
+      message: 'Please sign in with Matrica before investing.',
+    };
+  }
+  if (raw.includes('Wallet not connected')) {
+    return {
+      title: 'Wallet Disconnected',
+      message: 'Your wallet was disconnected. Please reconnect and try again.',
+    };
+  }
+  if (raw.includes('Network request failed') || raw.includes('fetch')) {
+    return {
+      title: 'Network Error',
+      message: 'Could not reach the Solana network. Check your connection and try again.',
+    };
+  }
+  if (raw.includes('blockhash') || raw.includes('expired')) {
+    return {
+      title: 'Transaction Expired',
+      message: 'The transaction took too long. Please try again.',
+    };
+  }
+
+  // Fallback
+  return { title: 'Something Went Wrong', message: raw };
+}
+
 export default function InvestScreen() {
   const navigation = useNavigation();
   const route = useRoute<RouteType>();
@@ -150,10 +233,8 @@ export default function InvestScreen() {
     } catch (error) {
       logger.error('[InvestScreen] Connect error:', error);
       pendingConnection.current = false;
-      Alert.alert(
-        'Connection Failed',
-        error instanceof Error ? error.message : 'Failed to connect wallet. Please try again.'
-      );
+      const friendly = getFriendlyError(error);
+      Alert.alert(friendly.title, friendly.message);
     }
   };
 
@@ -161,14 +242,6 @@ export default function InvestScreen() {
     const value = parseFloat(amount);
     if (isNaN(value) || value <= 0) {
       Alert.alert('Invalid Amount', 'Please enter a valid investment amount');
-      return false;
-    }
-
-    // minimum_investment is stored with 6 decimals
-    const minInvestmentRaw = parseFloat(plot?.minimum_investment || '0');
-    const minInvestmentDisplay = minInvestmentRaw / 1_000_000;
-    if (value < minInvestmentDisplay) {
-      Alert.alert('Below Minimum', `Minimum group investment is $${formatUSDC(minInvestmentRaw)}`);
       return false;
     }
 
@@ -215,11 +288,19 @@ export default function InvestScreen() {
     try {
       if (isInterestGathering) {
         addBreadcrumb('Indicating interest', 'investment');
-        await indicateInterest(plotPda, amountValue);
+        const result = await indicateInterest(plotPda, amountValue);
+        if (result === 'already-exists') {
+          setStep('confirm');
+          setOperationLoading(false);
+          Alert.alert(
+            'Already Registered',
+            'You have already indicated interest in this opportunity.'
+          );
+          return;
+        }
       } else {
         addBreadcrumb('Making deposit', 'investment');
-        const wateringPda = '';
-        await depositWatering(plotPda, wateringPda, amountValue);
+        await depositWatering(plotPda);
       }
 
       const duration = Date.now() - investmentStartTime;
@@ -267,7 +348,8 @@ export default function InvestScreen() {
       });
 
       setStep('confirm');
-      Alert.alert('Transaction Failed', errorMessage);
+      const friendly = getFriendlyError(error);
+      Alert.alert(friendly.title, friendly.message);
     } finally {
       setOperationLoading(false);
     }
@@ -445,7 +527,7 @@ function AmountStep({
       </View>
 
       <Text style={styles.minimumText}>
-        Minimum group investment: ${formatUSDC(minInvestmentRaw)}
+        Group target: ${formatUSDC(minInvestmentRaw)}
       </Text>
 
       <View style={styles.quickAmounts}>

@@ -224,7 +224,7 @@ function InvestmentCard({ investment }: { investment: Investment }) {
         <View style={styles.detailColumn}>
           <Text style={styles.detailLabel}>Deposited</Text>
           <Text style={[styles.detailValue, styles.detailValuePrimary]}>
-            ${formatUSDC(investment.deposit_amount)}
+            ${formatUSDC(investment.status === 'Deposited' ? investment.allotment : '0')}
           </Text>
         </View>
       </View>
