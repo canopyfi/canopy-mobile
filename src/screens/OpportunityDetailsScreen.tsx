@@ -35,7 +35,7 @@ export default function OpportunityDetailsScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteType>();
   const { pda } = route.params;
-  const { getPlotByPda } = useCanopy();
+  const { getPlotByPda, investments } = useCanopy();
 
   const [plot, setPlot] = useState<Plot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -83,9 +83,15 @@ export default function OpportunityDetailsScreen() {
   const opportunity = plotToOpportunity(plot);
   const progress = (parseFloat(opportunity.collected) / parseFloat(opportunity.target)) * 100;
 
+  // Find user's existing investment for this plot
+  const plotPda = plot.plot_pda || plot.pda;
+  const existingInvestment = investments.find((inv) => inv.plot_pda === plotPda);
+  const hasIndicatedInterest =
+    existingInvestment &&
+    (existingInvestment.status === 'Interested' || existingInvestment.status === 'Allocated');
+
   const canInvest =
-    plot.status === 'InterestGathering' ||
-    plot.status === 'Allocating' ||
+    (plot.status === 'InterestGathering' && !hasIndicatedInterest) ||
     plot.status === 'Collecting';
 
   return (
@@ -194,6 +200,28 @@ export default function OpportunityDetailsScreen() {
         </View>
       </ScrollView>
 
+      {/* Existing Interest Banner */}
+      {hasIndicatedInterest && plot.status === 'InterestGathering' && (
+        <View style={styles.footer}>
+          <View style={styles.existingInterestCard}>
+            <View style={styles.existingInterestRow}>
+              <View style={styles.existingInterestInfo}>
+                <Ionicons name="checkmark-circle" size={20} color={colors.primary} />
+                <Text style={styles.existingInterestLabel}>Your Interest</Text>
+              </View>
+              <Text style={styles.existingInterestAmount}>
+                ${formatUSDC(existingInvestment.requested_allotment)}
+              </Text>
+            </View>
+            {existingInvestment.status === 'Allocated' && (
+              <Text style={styles.existingInterestStatus}>
+                Allocated: ${formatUSDC(existingInvestment.allotment)}
+              </Text>
+            )}
+          </View>
+        </View>
+      )}
+
       {/* Invest Button */}
       {canInvest && (
         <View style={styles.footer}>
@@ -208,7 +236,7 @@ export default function OpportunityDetailsScreen() {
           >
             <Ionicons name="leaf" size={20} color={colors.background} />
             <Text style={styles.investButtonText}>
-              {plot.status === 'InterestGathering' ? 'Indicate Interest' : 'Invest Now'}
+              {plot.status === 'Collecting' ? 'Deposit Now' : 'Indicate Interest'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -453,5 +481,38 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     fontFamily: fontFamily.subheading,
     color: colors.background,
+  },
+  existingInterestCard: {
+    backgroundColor: `${colors.primary}10`,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: `${colors.primary}30`,
+  },
+  existingInterestRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  existingInterestInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  existingInterestLabel: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.subheading,
+    color: colors.text,
+  },
+  existingInterestAmount: {
+    fontSize: fontSize.xl,
+    fontFamily: fontFamily.heading,
+    color: colors.primary,
+  },
+  existingInterestStatus: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.body,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
   },
 });

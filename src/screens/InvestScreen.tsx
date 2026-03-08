@@ -27,6 +27,15 @@ import { logger } from '../lib/logger';
 
 type RouteType = RouteProp<RootStackParamList, 'Invest'>;
 
+function calculateFees(plot: Plot | null, amount: number) {
+  const platformFeePct = (plot?.platform_fee_bps || 0) / 100;
+  const groveFeePct = (plot?.grove_fee_bps || 0) / 100;
+  const platformFeeAmount = (amount * platformFeePct) / 100;
+  const groveFeeAmount = (amount * groveFeePct) / 100;
+  const totalToBePaid = amount + platformFeeAmount + groveFeeAmount;
+  return { platformFeePct, groveFeePct, platformFeeAmount, groveFeeAmount, totalToBePaid };
+}
+
 /**
  * Map raw MWA / Solana errors to user-friendly messages.
  */
@@ -40,10 +49,10 @@ function getFriendlyError(error: unknown): { title: string; message: string } {
       message: 'Please install a Solana wallet app (like Phantom or Solflare) and try again.',
     };
   }
-  if (raw.includes('cancelled') || raw.includes('canceled')) {
+  if (raw.includes('cancelled') || raw.includes('canceled') || raw.includes('CancellationException')) {
     return { title: 'Cancelled', message: 'You cancelled the wallet request.' };
   }
-  if (raw.includes('rejected') || raw.includes('denied')) {
+  if (raw.includes('rejected') || raw.includes('denied') || raw.includes('NOT_SIGNED')) {
     return { title: 'Rejected', message: 'The transaction was rejected in your wallet.' };
   }
   if (raw.includes('timeout') || raw.includes('timed out')) {
@@ -117,7 +126,7 @@ export default function InvestScreen() {
 
   // Use wallet context for Solana transaction signing
   const { walletAddress, connected, connecting, connect } = useWallet();
-  const { getPlotByPda } = useCanopy();
+  const { getPlotByPda, investments } = useCanopy();
   const { indicateInterest, depositWatering } = useSolanaOperations();
 
   const [plot, setPlot] = useState<Plot | null>(null);
@@ -133,6 +142,8 @@ export default function InvestScreen() {
   const appState = useRef(AppState.currentState);
   const pendingConnection = useRef(false);
 
+  const isCollecting = plot?.status === 'Collecting';
+
   useEffect(() => {
     fetchPlot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -145,7 +156,7 @@ export default function InvestScreen() {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
         // Check if wallet is now connected after returning from wallet app
         if (pendingConnection.current && connected) {
-          setStep('amount');
+          setStep(isCollecting ? 'confirm' : 'amount');
           pendingConnection.current = false;
         }
       }
@@ -155,26 +166,26 @@ export default function InvestScreen() {
     return () => {
       subscription.remove();
     };
-  }, [connected]);
+  }, [connected, isCollecting]);
 
   // Also use focus effect to check connection when screen regains focus
   useFocusEffect(
     useCallback(() => {
       // When screen gains focus, check if wallet is connected
       if (connected && step === 'wallet') {
-        setStep('amount');
+        setStep(isCollecting ? 'confirm' : 'amount');
       }
-    }, [connected, step])
+    }, [connected, step, isCollecting])
   );
 
-  // If wallet becomes connected, move to amount step
+  // If wallet becomes connected, move to next step
   useEffect(() => {
     logger.debug('[InvestScreen] useEffect: connected=', connected, 'step=', step);
     if (connected && step === 'wallet') {
-      logger.debug('[InvestScreen] Moving to amount step');
-      setStep('amount');
+      logger.debug('[InvestScreen] Moving to', isCollecting ? 'confirm' : 'amount', 'step');
+      setStep(isCollecting ? 'confirm' : 'amount');
     }
-  }, [connected, step]);
+  }, [connected, step, isCollecting]);
 
   const fetchPlot = async () => {
     try {
@@ -189,8 +200,21 @@ export default function InvestScreen() {
         walletConnected: connected,
       });
 
-      // If wallet is already connected, skip to amount step
-      if (connected) {
+      // For Collecting plots, pre-fill the user's allocated amount (convert from raw USDC to dollars)
+      if (data?.status === 'Collecting') {
+        const plotPda = data.plot_pda || data.pda;
+        const existing = investments.find(
+          (inv) => inv.plot_pda === plotPda && (inv.status === 'Allocated' || inv.status === 'Interested')
+        );
+        if (existing) {
+          const rawAmount = parseFloat(existing.allotment || existing.requested_allotment || '0');
+          setAmount((rawAmount / 1_000_000).toString());
+        }
+        // Skip amount entry, go straight to confirm (or wallet if not connected)
+        if (connected) {
+          setStep('confirm');
+        }
+      } else if (connected) {
         setStep('amount');
       }
     } catch (error) {
@@ -378,7 +402,7 @@ export default function InvestScreen() {
             <WalletStep plot={plot} onConnect={handleConnectWallet} connecting={connecting} />
           )}
 
-          {step === 'amount' && (
+          {step === 'amount' && !isCollecting && (
             <AmountStep
               plot={plot}
               amount={amount}
@@ -392,7 +416,7 @@ export default function InvestScreen() {
             <ConfirmStep
               plot={plot}
               amount={amount}
-              onBack={() => setStep('amount')}
+              onBack={isCollecting ? undefined : () => setStep('amount')}
               onConfirm={handleInvest}
               loading={operationLoading}
             />
@@ -542,6 +566,8 @@ function AmountStep({
         ))}
       </View>
 
+      <FeeBreakdown plot={plot} amount={parseFloat(amount) || 0} />
+
       <TouchableOpacity
         style={[styles.continueButton, !amount && styles.continueButtonDisabled]}
         onPress={onContinue}
@@ -562,30 +588,41 @@ function ConfirmStep({
 }: {
   plot: Plot | null;
   amount: string;
-  onBack: () => void;
+  onBack?: (() => void) | undefined;
   onConfirm: () => void;
   loading: boolean;
 }) {
   const isInterestGathering = plot?.status === 'InterestGathering';
+  const isCollectingStatus = plot?.status === 'Collecting';
   const amountValue = parseFloat(amount);
 
   return (
     <View style={styles.stepContainer}>
       <View style={styles.stepHeader}>
-        <Ionicons name="checkmark-circle-outline" size={48} color={colors.primary} />
-        <Text style={styles.stepTitle}>Confirm Investment</Text>
-        <Text style={styles.stepSubtitle}>Please review your investment details</Text>
+        <Ionicons
+          name={isCollectingStatus ? 'arrow-down-circle-outline' : 'checkmark-circle-outline'}
+          size={48}
+          color={colors.primary}
+        />
+        <Text style={styles.stepTitle}>
+          {isCollectingStatus ? 'Deposit Investment' : 'Confirm Investment'}
+        </Text>
+        <Text style={styles.stepSubtitle}>
+          {isCollectingStatus
+            ? 'Deposit your allocated amount to complete your investment'
+            : 'Please review your investment details'}
+        </Text>
       </View>
 
       <View style={styles.summaryCard}>
         <SummaryRow label="Opportunity" value={plot?.title || plot?.name || ''} />
-        <SummaryRow label="Amount" value={`$${amountValue.toLocaleString()}`} highlight />
         <SummaryRow
           label="Type"
           value={isInterestGathering ? 'Interest Indication' : 'Investment Deposit'}
         />
-        <SummaryRow label="Status" value={plot?.status || ''} />
       </View>
+
+      <FeeBreakdown plot={plot} amount={amountValue} />
 
       {isInterestGathering && (
         <View style={styles.infoBox}>
@@ -597,21 +634,68 @@ function ConfirmStep({
         </View>
       )}
 
+      {isCollectingStatus && (
+        <View style={styles.infoBox}>
+          <Ionicons name="information-circle-outline" size={20} color={colors.info} />
+          <Text style={styles.infoText}>
+            Your allocation has been confirmed. Tap Deposit to transfer USDC and complete your
+            investment.
+          </Text>
+        </View>
+      )}
+
       <View style={styles.buttonRow}>
-        <TouchableOpacity style={styles.backButton} onPress={onBack}>
-          <Text style={styles.backButtonText}>Back</Text>
-        </TouchableOpacity>
+        {onBack && (
+          <TouchableOpacity style={styles.backButton} onPress={onBack}>
+            <Text style={styles.backButtonText}>Back</Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
-          style={[styles.confirmButton, loading && styles.confirmButtonDisabled]}
+          style={[styles.confirmButton, loading && styles.confirmButtonDisabled, !onBack && { flex: 1 }]}
           onPress={onConfirm}
           disabled={loading}
         >
           {loading ? (
             <ActivityIndicator color={colors.background} size="small" />
           ) : (
-            <Text style={styles.confirmButtonText}>Confirm</Text>
+            <Text style={styles.confirmButtonText}>
+              {isCollectingStatus ? 'Deposit' : 'Confirm'}
+            </Text>
           )}
         </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+function formatDollars(value: number): string {
+  return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function FeeBreakdown({ plot, amount }: { plot: Plot | null; amount: number }) {
+  const { platformFeePct, groveFeePct, platformFeeAmount, groveFeeAmount, totalToBePaid } =
+    calculateFees(plot, amount);
+
+  if (amount <= 0) return null;
+
+  return (
+    <View style={styles.feeCard}>
+      <View style={styles.feeRow}>
+        <Text style={styles.feeLabel}>Investment amount</Text>
+        <Text style={styles.feeValue}>${formatDollars(amount)}</Text>
+      </View>
+      <View style={styles.feeRow}>
+        <Text style={styles.feeLabel}>Platform fee ({platformFeePct}%)</Text>
+        <Text style={styles.feeValue}>${formatDollars(platformFeeAmount)}</Text>
+      </View>
+      <View style={styles.feeRow}>
+        <Text style={styles.feeLabel}>Grove fee ({groveFeePct}%)</Text>
+        <Text style={styles.feeValue}>${formatDollars(groveFeeAmount)}</Text>
+      </View>
+      <View style={styles.feeDivider} />
+      <View style={styles.feeRow}>
+        <Text style={styles.feeTotalLabel}>Total to be paid</Text>
+        <Text style={styles.feeTotalValue}>${formatDollars(totalToBePaid)}</Text>
       </View>
     </View>
   );
@@ -970,5 +1054,43 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     fontFamily: fontFamily.subheading,
     color: colors.background,
+  },
+  feeCard: {
+    backgroundColor: colors.card,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  feeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+  },
+  feeLabel: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.body,
+    color: colors.textMuted,
+  },
+  feeValue: {
+    fontSize: fontSize.sm,
+    fontFamily: fontFamily.subheading,
+    color: colors.text,
+  },
+  feeDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.sm,
+  },
+  feeTotalLabel: {
+    fontSize: fontSize.base,
+    fontFamily: fontFamily.subheading,
+    color: colors.text,
+  },
+  feeTotalValue: {
+    fontSize: fontSize.lg,
+    fontFamily: fontFamily.heading,
+    color: colors.primary,
   },
 });

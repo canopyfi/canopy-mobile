@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -32,6 +32,14 @@ export default function DashboardScreen() {
   const { matricaProfile, plots, investments, isLoading, refreshPlots, refreshInvestments } =
     useCanopy();
   const [refreshing, setRefreshing] = useState(false);
+
+  // Refresh data when screen gains focus (e.g. returning from detail/invest screens)
+  useFocusEffect(
+    useCallback(() => {
+      refreshPlots();
+      refreshInvestments();
+    }, [refreshPlots, refreshInvestments])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
