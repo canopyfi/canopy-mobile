@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useCanopy } from '../contexts/CanopyContext';
@@ -22,8 +23,7 @@ import {
   getStatusDisplayName,
   formatUSDC,
 } from '../lib/theme';
-import { getUserInvestments, getInvestmentSummary } from '../lib/api';
-import { Investment, InvestmentSummary } from '../types';
+import { Investment } from '../types';
 
 const STATUS_FILTERS = [
   { label: 'All', value: '' },
@@ -33,42 +33,21 @@ const STATUS_FILTERS = [
 ];
 
 export default function InvestmentsScreen() {
-  const { walletAddress } = useCanopy();
-  const [investments, setInvestments] = useState<Investment[]>([]);
-  const [summary, setSummary] = useState<InvestmentSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { investments, investmentSummary: summary, isLoading, refreshInvestments } = useCanopy();
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
 
-  const fetchData = async () => {
-    if (!walletAddress) {
-      setLoading(false);
-      return;
-    }
+  // Refresh when screen gains focus
+  useFocusEffect(
+    useCallback(() => {
+      refreshInvestments();
+    }, [refreshInvestments])
+  );
 
-    try {
-      const [investmentsData, summaryData] = await Promise.all([
-        getUserInvestments(walletAddress),
-        getInvestmentSummary(walletAddress),
-      ]);
-      setInvestments(investmentsData);
-      setSummary(summaryData);
-    } catch {
-      // Handle error
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletAddress]);
-
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    fetchData();
+    await refreshInvestments();
+    setRefreshing(false);
   };
 
   const filteredInvestments = statusFilter
@@ -77,7 +56,7 @@ export default function InvestmentsScreen() {
 
   const renderItem = ({ item }: { item: Investment }) => <InvestmentCard investment={item} />;
 
-  if (loading) {
+  if (isLoading && investments.length === 0) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={colors.primary} />

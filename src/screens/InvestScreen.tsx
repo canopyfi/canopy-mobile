@@ -108,6 +108,12 @@ function getFriendlyError(error: unknown): { title: string; message: string } {
       message: 'Could not reach the Solana network. Check your connection and try again.',
     };
   }
+  if (raw.includes('confirmation timed out') && raw.includes('may have succeeded')) {
+    return {
+      title: 'Confirmation Pending',
+      message: 'The transaction was sent but we couldn\'t confirm it in time. Check your wallet — it may have succeeded. Pull to refresh to check.',
+    };
+  }
   if (raw.includes('blockhash') || raw.includes('expired')) {
     return {
       title: 'Transaction Expired',
@@ -126,7 +132,7 @@ export default function InvestScreen() {
 
   // Use wallet context for Solana transaction signing
   const { walletAddress, connected, connecting, connect } = useWallet();
-  const { getPlotByPda, investments } = useCanopy();
+  const { getPlotByPda, investments, refreshInvestments } = useCanopy();
   const { indicateInterest, depositWatering } = useSolanaOperations();
 
   const [plot, setPlot] = useState<Plot | null>(null);
@@ -342,6 +348,9 @@ export default function InvestScreen() {
         walletAddress,
         durationMs: duration,
       });
+
+      // Refresh investments so OpportunityDetailsScreen sees the updated status
+      refreshInvestments();
 
       setStep('success');
     } catch (error) {

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { AnchorProvider, BN, Program } from '@coral-xyz/anchor';
-import { Keypair, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
 import { Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { useWallet } from '../contexts/WalletContext';
 import { useCanopy } from '../contexts/CanopyContext';
@@ -10,6 +10,48 @@ import { trackWalletTransaction, captureWalletFailure } from '../lib/wallet-tele
 import { WateringClient } from '@canopyfi/sdk';
 import type { Canopy } from '@canopyfi/sdk';
 import idlJson from '../lib/canopy-idl.json';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Confirm a transaction with retries. MWA sends the user to an external wallet
+ * app; by the time they sign and return, the blockhash may have expired.
+ * We first try the standard confirmTransaction, then fall back to polling
+ * getSignatureStatus with retries and back-off.
+ */
+async function confirmWithRetry(
+  connection: Connection,
+  signature: string,
+  blockhash: string,
+  lastValidBlockHeight: number,
+  maxRetries = 5,
+): Promise<void> {
+  // Fast path: standard confirmation (works when MWA round-trip is quick)
+  try {
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight });
+    return;
+  } catch {
+    // Blockhash likely expired — fall through to polling
+  }
+
+  // Slow path: poll getSignatureStatus with retries
+  for (let i = 0; i < maxRetries; i++) {
+    await sleep(2000 * (i + 1)); // 2s, 4s, 6s, 8s, 10s
+    try {
+      const status = await connection.getSignatureStatus(signature);
+      if (status?.value?.confirmationStatus) {
+        return; // Transaction landed on-chain
+      }
+    } catch {
+      // Connection may still be reconnecting after app foreground — retry
+    }
+  }
+
+  throw new Error(
+    'Transaction was sent but confirmation timed out. ' +
+    'Check your wallet — the transaction may have succeeded.'
+  );
+}
 
 export function useSolanaOperations() {
   const { connection, publicKey, signAndSendTransaction } = useWallet();
@@ -155,12 +197,8 @@ export function useSolanaOperations() {
           // Sign and send via Mobile Wallet Adapter
           const signature = await signAndSendTransaction(transaction);
 
-          // Wait for confirmation
-          await connection.confirmTransaction({
-            signature,
-            blockhash,
-            lastValidBlockHeight,
-          });
+          // Confirm the transaction with retry fallback for MWA delays
+          await confirmWithRetry(connection, signature, blockhash, lastValidBlockHeight);
 
           return signature;
         });
@@ -227,12 +265,10 @@ export function useSolanaOperations() {
           // Sign and send via MWA (wallet adds its signature)
           const signature = await signAndSendTransaction(transaction);
 
-          // Wait for confirmation
-          await connection.confirmTransaction({
-            signature,
-            blockhash,
-            lastValidBlockHeight,
-          });
+          // Confirm the transaction. MWA round-trip (app backgrounding, wallet
+          // signing, returning) can easily exceed blockhash validity, so we
+          // fall back to polling getSignatureStatus with retries.
+          await confirmWithRetry(connection, signature, blockhash, lastValidBlockHeight);
 
           return {
             signature,
