@@ -1,33 +1,55 @@
-import { useCallback, useState } from 'react';
-import { PublicKey, LAMPORTS_PER_SOL, Transaction } from '@solana/web3.js';
+import { useCallback, useMemo, useState } from 'react';
+import { AnchorProvider, BN, Program } from '@coral-xyz/anchor';
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
 import { Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { useWallet } from '../contexts/WalletContext';
 import { useCanopy } from '../contexts/CanopyContext';
 import { useNetwork } from '../contexts/NetworkContext';
+import { NETWORK_CONFIGS } from '../lib/network-config';
 import { trackWalletTransaction, captureWalletFailure } from '../lib/wallet-telemetry';
+import { WateringClient } from '@canopyfi/sdk';
+import type { Canopy } from '@canopyfi/sdk';
+import idlJson from '../lib/canopy-idl.json';
 
-// Default Canopy program ID (matches @canopyfi/sdk devnet)
-const DEFAULT_CANOPY_PROGRAM_ID = '6M7Ysuvus47X5M4RQA48L3YPKpLi5vyN5dvvwoiDCGdF';
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Get program ID from environment
-const CANOPY_PROGRAM_ID = new PublicKey(
-  process.env.EXPO_PUBLIC_CANOPY_PROGRAM_ID || DEFAULT_CANOPY_PROGRAM_ID
-);
+/**
+ * Confirm a transaction with retries. MWA sends the user to an external wallet
+ * app; by the time they sign and return, the blockhash may have expired.
+ * We first try the standard confirmTransaction, then fall back to polling
+ * getSignatureStatus with retries and back-off.
+ */
+async function confirmWithRetry(
+  connection: Connection,
+  signature: string,
+  blockhash: string,
+  lastValidBlockHeight: number,
+  maxRetries = 5,
+): Promise<void> {
+  // Fast path: standard confirmation (works when MWA round-trip is quick)
+  try {
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight });
+    return;
+  } catch {
+    // Blockhash likely expired — fall through to polling
+  }
 
-// Token addresses
-const USDC_MINT = new PublicKey(
-  process.env.EXPO_PUBLIC_USDC_MINT || '2nEeqsyDdX3jztfxJKKego3x8AZ4xKHG2ZcQZrPkTtMk'
-);
+  // Slow path: poll getSignatureStatus with retries
+  for (let i = 0; i < maxRetries; i++) {
+    await sleep(2000 * (i + 1)); // 2s, 4s, 6s, 8s, 10s
+    try {
+      const status = await connection.getSignatureStatus(signature);
+      if (status?.value?.confirmationStatus) {
+        return; // Transaction landed on-chain
+      }
+    } catch {
+      // Connection may still be reconnecting after app foreground — retry
+    }
+  }
 
-// Derive watering PDA
-function deriveWateringPdaLocal(
-  programId: PublicKey,
-  plotPda: PublicKey,
-  memberPubkey: PublicKey
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from('watering'), plotPda.toBuffer(), memberPubkey.toBuffer()],
-    programId
+  throw new Error(
+    'Transaction was sent but confirmation timed out. ' +
+    'Check your wallet — the transaction may have succeeded.'
   );
 }
 
@@ -37,16 +59,47 @@ export function useSolanaOperations() {
   const { network } = useNetwork();
   const [loading, setLoading] = useState(false);
 
+  // Get the program ID from network config
+  const programId = useMemo(
+    () => new PublicKey(NETWORK_CONFIGS[network].programId),
+    [network]
+  );
+
+  // Create a read-only Anchor Program instance for building transactions.
+  // The dummy wallet is never used for signing — MWA handles all signing.
+  const program = useMemo(() => {
+    const dummyWallet = {
+      publicKey: Keypair.generate().publicKey,
+      signTransaction: async (tx: any) => tx,
+      signAllTransactions: async (txs: any[]) => txs,
+    };
+    const provider = new AnchorProvider(connection, dummyWallet as any, {
+      commitment: 'confirmed',
+    });
+    // Override IDL address with current network's program ID
+    const updatedIdl = { ...idlJson, address: programId.toString() };
+    return new Program<Canopy>(updatedIdl as any, provider);
+  }, [connection, programId]);
+
+  // Create WateringClient from the SDK
+  const wateringClient = useMemo(() => {
+    const { apiUrl } = NETWORK_CONFIGS[network];
+    return new WateringClient(program as any, program.provider as AnchorProvider, {
+      apiBaseUrl: apiUrl,
+      apiKey: process.env.EXPO_PUBLIC_API_KEY,
+    });
+  }, [program, network]);
+
   /**
    * Derive a PDA for a watering account
    */
   const getWateringPda = useCallback(
     (plotPda: string): PublicKey => {
       if (!publicKey) throw new Error('Wallet not connected');
-      const [pda] = deriveWateringPdaLocal(CANOPY_PROGRAM_ID, new PublicKey(plotPda), publicKey);
+      const [pda] = wateringClient.deriveWateringPda(new PublicKey(plotPda), publicKey);
       return pda;
     },
-    [publicKey]
+    [publicKey, wateringClient]
   );
 
   /**
@@ -66,8 +119,36 @@ export function useSolanaOperations() {
   );
 
   /**
-   * Indicate interest in an opportunity
-   * This builds the transaction instruction manually and sends via MWA
+   * Ensure user wallet exists in backend database before on-chain transaction.
+   * This allows the event listener to map on-chain waterings to the user.
+   */
+  const ensureUserWallet = useCallback(
+    async (externalUserId: string, walletAddress: string): Promise<void> => {
+      const { apiUrl } = NETWORK_CONFIGS[network];
+      try {
+        await fetch(`${apiUrl}/api/users/ensure-wallet`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(process.env.EXPO_PUBLIC_API_KEY
+              ? { 'X-API-Key': process.env.EXPO_PUBLIC_API_KEY }
+              : {}),
+          },
+          body: JSON.stringify({
+            external_user_id: externalUserId,
+            wallet_address: walletAddress,
+          }),
+        });
+      } catch {
+        // Non-critical — event listener can still link via on-chain external_user_id
+      }
+    },
+    [network]
+  );
+
+  /**
+   * Indicate interest in an opportunity.
+   * Uses SDK's WateringClient to build the transaction, then signs via MWA.
    */
   const indicateInterest = useCallback(
     async (plotPda: string, amount: number): Promise<string> => {
@@ -87,56 +168,64 @@ export function useSolanaOperations() {
       try {
         return await trackWalletTransaction('indicate_interest', attrs, async () => {
           const externalUserId = matricaProfile.id.toString();
+          const plot = new PublicKey(plotPda);
 
-          // Use API-based approach for indicating interest
-          // Call the backend API to create the interest indication
-          const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL || 'https://api.canopy.app';
+          // Ensure user wallet exists in backend for event listener mapping
+          await ensureUserWallet(externalUserId, publicKey.toBase58());
 
-          const response = await fetch(`${apiBaseUrl}/api/waterings/indicate`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              plot_pda: plotPda,
-              wallet_address: publicKey.toBase58(),
-              requested_allotment: Math.floor(amount * 1_000_000),
-              external_user_id: externalUserId,
-            }),
-          });
-
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const errorMessage = errorData.message || 'Failed to indicate interest';
-            captureWalletFailure('indicate_interest', errorMessage, attrs);
-            throw new Error(errorMessage);
+          // Check if watering already exists
+          const [wateringPda] = wateringClient.deriveWateringPda(plot, publicKey);
+          const existingAccount = await connection.getAccountInfo(wateringPda);
+          if (existingAccount) {
+            return 'already-exists';
           }
 
-          const result = await response.json();
-          return result.signature || 'pending';
+          // Build the transaction using SDK builder
+          const { transaction } = await wateringClient.buildIndicateInterestTx({
+            plotPda: plot,
+            requestedAllotment: new BN(Math.floor(amount * 1_000_000)),
+            external_user_id: externalUserId,
+            authority: publicKey,
+          });
+
+          // Set blockhash and fee payer for MWA signing
+          const { blockhash, lastValidBlockHeight } =
+            await connection.getLatestBlockhash();
+          transaction.recentBlockhash = blockhash;
+          transaction.feePayer = publicKey;
+
+          // Sign and send via Mobile Wallet Adapter
+          const signature = await signAndSendTransaction(transaction);
+
+          // Confirm the transaction with retry fallback for MWA delays
+          await confirmWithRetry(connection, signature, blockhash, lastValidBlockHeight);
+
+          return signature;
         });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        captureWalletFailure('indicate_interest', msg, attrs);
+        throw error;
       } finally {
         setLoading(false);
       }
     },
-    [publicKey, matricaProfile, network]
+    [publicKey, matricaProfile, network, connection, wateringClient, signAndSendTransaction, ensureUserWallet]
   );
 
   /**
-   * Deposit funds for an allocated investment
-   * This requires signing with MWA
+   * Deposit funds for an allocated investment.
+   * Uses SDK's WateringClient to build the deposit transaction with NFT receipt,
+   * partially signs with the asset keypair, then sends via MWA.
    */
   const depositWatering = useCallback(
     async (
       plotPda: string,
-      _wateringPda: string,
-      amount: number
     ): Promise<{ signature: string; receiptMint: PublicKey }> => {
       if (!publicKey) throw new Error('Wallet not connected');
 
       const attrs = {
         plot_pda: plotPda,
-        amount,
         wallet: publicKey.toBase58(),
         wallet_type: 'mobile_wallet_adapter',
         network,
@@ -146,56 +235,55 @@ export function useSolanaOperations() {
 
       try {
         return await trackWalletTransaction('deposit_watering', attrs, async () => {
-          // For deposit, we need to call the API to build the transaction
-          // then sign it with MWA
-          const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL || 'https://api.canopy.app';
+          const plot = new PublicKey(plotPda);
+          const [wateringPda] = wateringClient.deriveWateringPda(plot, publicKey);
 
-          const response = await fetch(`${apiBaseUrl}/api/waterings/deposit/prepare`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              plot_pda: plotPda,
-              wallet_address: publicKey.toBase58(),
-              amount: Math.floor(amount * 1_000_000),
-            }),
+          // Build the transaction using SDK builder
+          const result = await wateringClient.buildDepositWateringTx({
+            wateringPda,
+            plotPda: plot,
+            authority: publicKey,
           });
 
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const errorMessage = errorData.message || 'Failed to prepare deposit';
-            captureWalletFailure('deposit_watering', errorMessage, attrs);
-            throw new Error(errorMessage);
+          if (!result.success) {
+            throw new Error(result.error);
           }
 
-          const { transaction: serializedTx, receiptMint: receiptMintString } =
-            await response.json();
+          const { transaction, assetPubkey, signers } = result;
 
-          // Deserialize and sign the transaction
-          const transaction = Transaction.from(Buffer.from(serializedTx, 'base64'));
+          // Set blockhash and fee payer
+          const { blockhash, lastValidBlockHeight } =
+            await connection.getLatestBlockhash();
+          transaction.recentBlockhash = blockhash;
+          transaction.feePayer = publicKey;
 
-          // Sign and send via Mobile Wallet Adapter
+          // Partially sign with additional signers (assetKeypair for NFT receipt)
+          for (const signer of signers) {
+            transaction.partialSign(signer);
+          }
+
+          // Sign and send via MWA (wallet adds its signature)
           const signature = await signAndSendTransaction(transaction);
 
-          // Wait for confirmation
-          const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-          await connection.confirmTransaction({
-            signature,
-            blockhash,
-            lastValidBlockHeight,
-          });
+          // Confirm the transaction. MWA round-trip (app backgrounding, wallet
+          // signing, returning) can easily exceed blockhash validity, so we
+          // fall back to polling getSignatureStatus with retries.
+          await confirmWithRetry(connection, signature, blockhash, lastValidBlockHeight);
 
           return {
             signature,
-            receiptMint: new PublicKey(receiptMintString),
+            receiptMint: assetPubkey,
           };
         });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        captureWalletFailure('deposit_watering', msg, attrs);
+        throw error;
       } finally {
         setLoading(false);
       }
     },
-    [publicKey, connection, signAndSendTransaction, network]
+    [publicKey, connection, signAndSendTransaction, network, wateringClient]
   );
 
   /**
@@ -214,11 +302,11 @@ export function useSolanaOperations() {
     if (!publicKey) return 0;
 
     try {
-      // Get associated token account address using @solana/spl-token v0.1.8 API
+      const usdcMint = new PublicKey(NETWORK_CONFIGS[network].usdcMint);
       const tokenAccount = await Token.getAssociatedTokenAddress(
         ASSOCIATED_TOKEN_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
-        USDC_MINT,
+        usdcMint,
         publicKey
       );
       const balance = await connection.getTokenAccountBalance(tokenAccount);
@@ -226,7 +314,7 @@ export function useSolanaOperations() {
     } catch {
       return 0;
     }
-  }, [publicKey, connection]);
+  }, [publicKey, connection, network]);
 
   return {
     loading,
@@ -236,7 +324,6 @@ export function useSolanaOperations() {
     depositWatering,
     getSolBalance,
     getUsdcBalance,
-    // Expose SDK utilities
     deriveWateringPda: getWateringPda,
   };
 }

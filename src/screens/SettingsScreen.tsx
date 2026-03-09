@@ -154,9 +154,6 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Support</Text>
           <View style={styles.card}>
-            <TouchableOpacity onPress={() => openLink('https://canopy.app/help')}>
-              <SettingsRow icon="help-circle-outline" label="Help Center" showArrow />
-            </TouchableOpacity>
             <TouchableOpacity onPress={() => navigation.navigate('Terms')}>
               <SettingsRow icon="document-text-outline" label="Terms of Use" showArrow />
             </TouchableOpacity>

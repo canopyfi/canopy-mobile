@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -33,16 +33,23 @@ export default function DashboardScreen() {
     useCanopy();
   const [refreshing, setRefreshing] = useState(false);
 
+  // Refresh data when screen gains focus (e.g. returning from detail/invest screens)
+  useFocusEffect(
+    useCallback(() => {
+      refreshPlots();
+      refreshInvestments();
+    }, [refreshPlots, refreshInvestments])
+  );
+
   const onRefresh = async () => {
     setRefreshing(true);
     await Promise.all([refreshPlots(), refreshInvestments()]);
     setRefreshing(false);
   };
 
-  const totalInvested = investments.reduce(
-    (sum, inv) => sum + parseFloat(inv.deposit_amount || '0'),
-    0
-  );
+  const totalInvested = investments
+    .filter((inv) => inv.status === 'Deposited')
+    .reduce((sum, inv) => sum + parseFloat(inv.allotment || '0'), 0);
 
   const activeInvestments = investments.filter(
     (inv) => inv.status === 'Interested' || inv.status === 'Allocated'
@@ -236,7 +243,9 @@ function InvestmentCard({ investment }: { investment: Investment }) {
         </View>
         <View style={styles.investmentDetail}>
           <Text style={styles.detailLabel}>Deposited</Text>
-          <Text style={styles.detailValue}>${formatUSDC(investment.deposit_amount)}</Text>
+          <Text style={styles.detailValue}>
+            ${formatUSDC(investment.status === 'Deposited' ? investment.allotment : '0')}
+          </Text>
         </View>
       </View>
     </View>

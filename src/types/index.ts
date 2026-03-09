@@ -32,6 +32,8 @@ export interface Plot {
   seedling_name?: string;
   investor_count?: number;
   total_raised?: string;
+  platform_fee_bps?: number;
+  grove_fee_bps?: number;
 }
 
 export type PlotStatus =
@@ -117,6 +119,7 @@ export interface Investment {
   growth_cycle_name?: string;
   external_user_id?: string;
   wallet_address?: string;
+  deposit_tx_signature?: string | null;
 }
 
 export type InvestmentStatus = 'Interested' | 'Allocated' | 'Deposited' | 'Rejected' | 'Refunded';

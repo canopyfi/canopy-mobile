@@ -12,6 +12,7 @@ config.resolver.extraNodeModules = {
   buffer: require.resolve('buffer'),
 };
 
+
 // Suppress warnings for packages with incomplete React Native exports
 // These packages work fine with file-based resolution
 config.resolver.unstable_conditionNames = ['require', 'import', 'default'];

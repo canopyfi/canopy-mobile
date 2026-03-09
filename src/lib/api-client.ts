@@ -50,6 +50,8 @@ export interface Plot {
   seedling_name?: string;
   investor_count?: number;
   total_raised?: string;
+  platform_fee_bps?: number;
+  grove_fee_bps?: number;
 }
 
 export interface Investment {

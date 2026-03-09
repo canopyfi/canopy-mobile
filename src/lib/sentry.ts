@@ -89,8 +89,10 @@ export function initSentry(): void {
     release,
     dist,
 
-    // Enable debug in development
-    debug: __DEV__,
+    // Only enable Sentry debug logging when Sentry is actually sending events.
+    // In dev, Sentry is disabled (see `enabled` below) so debug logs just produce
+    // noisy "Transport disabled" console errors.
+    debug: false,
 
     // Capture 100% of transactions for performance monitoring
     tracesSampleRate: __DEV__ ? 1.0 : 0.2,
