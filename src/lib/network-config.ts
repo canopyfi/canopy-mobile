@@ -26,9 +26,8 @@ export interface NetworkConfig {
 // Get the local machine IP from environment or use localhost
 const LOCAL_IP = process.env.EXPO_PUBLIC_LOCAL_IP || '192.168.50.207';
 
-// Matrica OAuth credentials - two apps: production and development
-const MATRICA_PROD_CLIENT_ID = process.env.EXPO_PUBLIC_MATRICA_PROD_CLIENT_ID || '';
-const MATRICA_DEV_CLIENT_ID = process.env.EXPO_PUBLIC_MATRICA_DEV_CLIENT_ID || '';
+// Matrica OAuth credentials - same client ID for all environments
+const MATRICA_CLIENT_ID = process.env.EXPO_PUBLIC_MATRICA_CLIENT_ID || '';
 
 export const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
   mainnet: {
@@ -39,7 +38,7 @@ export const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
       process.env.EXPO_PUBLIC_MAINNET_PROGRAM_ID || 'canopYNMusfENJfeHfVqwvME3Z724EFnrfzRs9Bn8gE',
     usdcMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
     // Production Matrica OAuth app (canopy.trade)
-    matricaClientId: MATRICA_PROD_CLIENT_ID,
+    matricaClientId: MATRICA_CLIENT_ID,
     matricaCallbackUrl: 'https://canopy.trade/auth/mobile-callback',
   },
   devnet: {
@@ -50,7 +49,7 @@ export const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
       process.env.EXPO_PUBLIC_DEVNET_PROGRAM_ID || 'CNPYPRHDLsJwKsHULPfSTEiTPrAup41ZRR7TGeK3cn5G',
     usdcMint: 'ENT1vsb8yJBTc3GKBPExFtRptBMUZd6qEFkPaoUk5w9M', // Canopy Test Dollars
     // Development Matrica OAuth app (canopy.camp)
-    matricaClientId: MATRICA_DEV_CLIENT_ID,
+    matricaClientId: MATRICA_CLIENT_ID,
     matricaCallbackUrl: 'https://canopy.camp/auth/mobile-callback',
   },
   local: {
@@ -61,7 +60,7 @@ export const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
       process.env.EXPO_PUBLIC_LOCAL_PROGRAM_ID || 'CNpYpdAvW86xMdz93bn6BHSc8YNv3QTpmpUUjU9w4Rdu',
     usdcMint: '', // Will be set dynamically from platform config
     // Use devnet Matrica OAuth - callback at canopy.camp redirects to native app, then app hits local API
-    matricaClientId: MATRICA_DEV_CLIENT_ID,
+    matricaClientId: MATRICA_CLIENT_ID,
     matricaCallbackUrl: 'https://canopy.camp/auth/mobile-callback',
   },
 };
@@ -75,25 +74,21 @@ export function getAvailableNetworks(): NetworkType[] {
   if (__DEV__) {
     return ['mainnet', 'devnet', 'local'];
   }
-  return ['mainnet'];
+  return ['devnet'];
 }
 
 /**
  * Get the default network based on build type
  */
 export function getDefaultNetwork(): NetworkType {
-  if (__DEV__) {
-    // In dev, default to devnet for safety
-    return 'devnet';
-  }
-  return 'mainnet';
+  return 'devnet';
 }
 
 /**
  * Check if network selection is enabled
  */
 export function isNetworkSelectionEnabled(): boolean {
-  return __DEV__;
+  return true;
 }
 
 /**

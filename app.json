@@ -12,7 +12,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#0A2818"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.canopy.mobile"
@@ -37,7 +39,10 @@
               "scheme": "com.canopy.mobile"
             }
           ],
-          "category": ["DEFAULT", "BROWSABLE"]
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ]
         }
       ]
     },
@@ -68,8 +73,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "your-project-id"
+        "projectId": "6a5999bf-83af-40c8-b3a9-7c21f27a2a1f"
       }
-    }
+    },
+    "owner": "tuxr228"
   }
 }
